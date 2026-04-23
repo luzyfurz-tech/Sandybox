@@ -1,0 +1,5 @@
+{
+  "name": "Sandybox",
+  "description": "Autonomous Neural Interface for Sandybox CNC Motion Controller hardware (Debian/Ollama).",
+  "requestFramePermissions": []
+}
