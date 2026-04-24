@@ -1217,6 +1217,11 @@ export default function App() {
               <Activity className="w-3 h-3" />
               LATENCY: 42ms
             </span>
+            {systemInfo?.nodeVersion && (
+              <span className="flex items-center gap-2 border-l border-cyan-900/40 pl-6 text-orange-900/60 transition-all hover:text-orange-900">
+                NODE_SRV: {systemInfo.nodeVersion}
+              </span>
+            )}
             <span className="flex items-center gap-2 border-l border-cyan-900/20 pl-6">
               <div className="w-1.5 h-1.5 rounded-full bg-orange-600 animate-pulse" />
               HW_RAM: <span className="text-orange-900">512MB [LEAN_MODE]</span>

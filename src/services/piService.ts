@@ -7,6 +7,7 @@ export interface FileInfo {
 
 export interface SystemInfo {
   cpuLoad: string;
+  nodeVersion?: string;
   memory: {
     total: string;
     free: string;

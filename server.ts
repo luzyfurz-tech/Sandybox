@@ -126,6 +126,7 @@ async function startServer() {
       const freeMem = os.freemem();
       res.json({
         cpuLoad: load[0].toFixed(2),
+        nodeVersion: process.version,
         memory: {
           total: (totalMem / 1024 / 1024).toFixed(0),
           free: (freeMem / 1024 / 1024).toFixed(0),
