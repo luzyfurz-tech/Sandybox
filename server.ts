@@ -143,17 +143,34 @@ async function startServer() {
 
   // Execute command (The "Muscle")
   app.post("/api/local/exec", async (req, res) => {
-    const { command, cwd } = req.body;
+    let { command, cwd, useSudo } = req.body;
     try {
-      const { stdout, stderr } = await execAsync(command, { cwd: cwd || os.homedir() });
+      // If the command already starts with sudo, ensure it's non-interactive
+      if (command.trim().startsWith('sudo ')) {
+        command = command.trim().replace(/^sudo /, 'sudo -n ');
+      } else if (useSudo) {
+        command = `sudo -n ${command}`;
+      }
+
+      const { stdout, stderr } = await execAsync(command, { 
+        cwd: cwd || os.homedir(),
+        env: { ...process.env, PATH: `${process.env.PATH}:/usr/sbin:/sbin` }
+      });
       
-      // Log to SQLite
       sqlite.prepare("INSERT INTO sandybox_logs (event) VALUES (?)").run(`Command Executed: ${command}`);
-      
       res.json({ stdout, stderr });
     } catch (error: any) {
-      sqlite.prepare("INSERT INTO sandybox_logs (event) VALUES (?)").run(`Command Failed: ${command} | Error: ${error.message}`);
-      res.status(500).json({ error: error.message, stderr: error.stderr });
+      let errorMessage = error.message;
+      
+      if (errorMessage.includes("Interactive authentication required") || errorMessage.includes("sudo: a password is required")) {
+        errorMessage = `[SANDYBOX_PERMISSION_DENIED]: Root privileges required.\n\n` +
+          `To fix this on your Raspberry Pi, run the following command in your physical terminal:\n` +
+          `echo "$(whoami) ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/sandybox-ai\n\n` +
+          `Original Error: ${errorMessage}`;
+      }
+      
+      sqlite.prepare("INSERT INTO sandybox_logs (event) VALUES (?)").run(`Command Failed: ${command} | Error: ${errorMessage}`);
+      res.status(500).json({ error: errorMessage, stderr: error.stderr });
     }
   });
 
