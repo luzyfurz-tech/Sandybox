@@ -1,5 +1,5 @@
 {
   "name": "Sandybox",
-  "description": "Autonomous Neural Interface for Sandybox CNC Motion Controller hardware (Debian/Ollama).",
+  "description": "Sandybox is an autonomous neural interface and hardware controller dashboard. It features self-coding capabilities via the Sandybox API, dynamic model switching, and real-time hardware orchestration. Designed to evolve through interaction and autonomous task execution.",
   "requestFramePermissions": []
 }

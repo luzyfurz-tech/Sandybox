@@ -234,7 +234,7 @@ async function startServer() {
     const apiKey = req.headers.authorization?.split(" ")[1];
     if (!apiKey || apiKey === "null") return res.status(401).json({ error: "Unauthorized" });
 
-    const ollamaHost = req.headers['x-ollama-host'] as string || process.env.OLLAMA_HOST || "http://localhost:11434";
+    const ollamaHost = req.headers['x-ollama-host'] as string || process.env.OLLAMA_HOST || "https://ollama.com";
 
     try {
       // 1. Try Ollama Native Search
@@ -281,7 +281,7 @@ async function startServer() {
     const apiKey = req.headers.authorization?.split(" ")[1];
     if (!apiKey || apiKey === "null") return res.status(401).json({ error: "Unauthorized" });
 
-    const ollamaHost = req.headers['x-ollama-host'] as string || process.env.OLLAMA_HOST || "http://localhost:11434";
+    const ollamaHost = req.headers['x-ollama-host'] as string || process.env.OLLAMA_HOST || "https://ollama.com";
 
     try {
       // 1. Try Ollama Native Fetch
@@ -381,7 +381,7 @@ async function startServer() {
 
     try {
       // Priority: 1. x-ollama-host header, 2. Env variable, 3. Default
-      const ollamaHost = req.headers['x-ollama-host'] as string || process.env.OLLAMA_HOST || "http://localhost:11434";
+      const ollamaHost = req.headers['x-ollama-host'] as string || process.env.OLLAMA_HOST || "https://ollama.com";
       const ollamaApiKey = process.env.OLLAMA_API_KEY || apiKey;
 
       console.log(`[Ollama Proxy] Fetching models from: ${ollamaHost}`);
@@ -416,7 +416,7 @@ async function startServer() {
     }
 
     try {
-      const ollamaHost = req.headers['x-ollama-host'] as string || process.env.OLLAMA_HOST || "http://localhost:11434";
+      const ollamaHost = req.headers['x-ollama-host'] as string || process.env.OLLAMA_HOST || "https://ollama.com";
       const ollamaApiKey = process.env.OLLAMA_API_KEY || apiKey;
 
       const ollama = new Ollama({
