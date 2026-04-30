@@ -109,7 +109,8 @@ export default function App() {
   const [activePersonaId, setActivePersonaId] = useState<string>('sandybox_core');
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const logRef = useRef<HTMLDivElement>(null);
+  const logRef = useRef<HTMLDivElement>(null); // For Activity Stream
+  const terminalRef = useRef<HTMLDivElement>(null); // For Cognitive Shell
   const responseRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -173,12 +174,27 @@ export default function App() {
     }
   }, [activeTab]);
 
-  // Auto-scroll logs
+  // Auto-scroll logs (Activity Stream) - Only if near bottom
   useEffect(() => {
     if (logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
+      const { scrollTop, scrollHeight, clientHeight } = logRef.current;
+      const isAtBottom = scrollHeight - scrollTop <= clientHeight + 100;
+      if (isAtBottom) {
+        logRef.current.scrollTop = logRef.current.scrollHeight;
+      }
     }
   }, [agentLogs]);
+
+  // Auto-scroll terminal (Cognitive Shell) - Only if near bottom
+  useEffect(() => {
+    if (terminalRef.current) {
+      const { scrollTop, scrollHeight, clientHeight } = terminalRef.current;
+      const isAtBottom = scrollHeight - scrollTop <= clientHeight + 100; // 100px threshold
+      if (isAtBottom) {
+        terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+      }
+    }
+  }, [terminalHistory]);
 
   // Auto-scroll agent response
   useEffect(() => {
@@ -436,22 +452,36 @@ export default function App() {
     }
 
     // 5. Look for [[EXEC: command]] (Process all sequentially)
-    const execMatches = Array.from(content.matchAll(/\[\[EXEC:\s*(.*?)\]\]/g));
+    // We use [\s\S] to match across multiple lines
+    const execMatches = Array.from(content.matchAll(/\[\[EXEC:\s*([\s\S]*?)\]\]/g));
     for (const match of execMatches) {
       const command = match[1].trim();
+      
+      // Safety check: if the "command" looks like an AI refusal, skip it
+      const isRefusal = command.toLowerCase().startsWith("i can't") || 
+                        command.toLowerCase().startsWith("i am sorry") ||
+                        command.toLowerCase().startsWith("i'm sorry") ||
+                        command.length > 2000; // Unusually long strings are likely hallucinations or binary dumps
+
+      if (isRefusal) {
+        addLog('error', `AI Core attempted to execute suspicious string (likely refusal/hallucination): ${command.substring(0, 50)}...`);
+        systemFeedbackHistory.push(`[[EXEC_BLOCKED]]: The cognitive shell blocked a command that appeared to be conversational text or exceeded safety limits.`);
+        continue;
+      }
+
       addLog('info', `AI Core requesting EXEC: ${command}`);
       try {
         const res = await piService.executeCommand(command, leftPane.path);
         const output = res.stdout || res.stderr || '(Process completed with no output)';
-        systemFeedbackHistory.push(`[[EXEC_OUTPUT]] for "${command}":\n${output}`);
+        systemFeedbackHistory.push(`[[EXEC_OUTPUT]] for "${command.length > 50 ? command.substring(0, 50) + '...' : command}":\n${output}`);
         
-        if (command.includes('mkdir') || command.includes('touch') || command.includes('rm') || command.includes('mv') || command.includes('cp')) {
+        if (command.includes('mkdir') || command.includes('touch') || command.includes('rm') || command.includes('mv') || command.includes('cp') || command.includes('git')) {
           const refresh = await piService.getFiles(leftPane.path);
           setLeftPane(refresh);
         }
       } catch (err: any) {
         addLog('error', `AI EXEC failed: ${err.message}`);
-        systemFeedbackHistory.push(`[[EXEC_ERROR]] for "${command}":\n${err.message}`);
+        systemFeedbackHistory.push(`[[EXEC_ERROR]] for "${command.substring(0, 50)}":\n${err.message}`);
       }
     }
 
@@ -1219,7 +1249,7 @@ export default function App() {
                   </div>
 
                   <div 
-                    ref={logRef}
+                    ref={terminalRef}
                     className="flex-1 overflow-y-auto p-4 md:p-6 font-mono text-[11px] space-y-4 bg-black/60 relative z-10 scrollbar-thin"
                   >
                     {terminalHistory.length === 0 && (

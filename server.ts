@@ -154,7 +154,7 @@ async function startServer() {
 
       const { stdout, stderr } = await execAsync(command, { 
         cwd: cwd || os.homedir(),
-        env: { ...process.env, PATH: `${process.env.PATH}:/usr/sbin:/sbin` }
+        env: { ...process.env, PATH: `${process.env.PATH}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin` }
       });
       
       sqlite.prepare("INSERT INTO sandybox_logs (event) VALUES (?)").run(`Command Executed: ${command}`);
