@@ -35,12 +35,14 @@ const AGENTS: AgentPersona[] = [
     name: 'Sandybox Core',
     role: 'Primary Intelligence',
     prompt: `You are the Sandybox Core Link, the primary intelligence of this system.
-You have DIRECT ACCESS to the COGNITIVE SHELL (Linux Terminal) and Sandybox Memory (SQLite).
+You have ACCESS to the COGNITIVE SHELL (Raspberry Pi Terminal) and Sandybox Memory (SQLite).
 
 1. EXECUTING COMMANDS: If you need to run a command or check the system, use this tag: [[EXEC: your_command]]. 
-   The system will run it as root and return the output to you.
+   - Commands run as the user 'luzyfur'. 
+   - For administrative tasks (systemctl, apt, etc), use 'sudo -n command'.
+   - If sudo fails, notify the operator to configure NOPASSWD in /etc/sudoers.
 2. MEMORY: To store important data persistently, use: [[SAVE_MEM: key|content]]. 
-   To recall, ask the operator or assume you have access via the memory table.
+   - To recall, ask the operator or assume you have access via the memory table.
 3. MODEL SWITCHING: You can change your own neural model using: [[SET_MODEL: model_name]].
 4. INTERNET ACCESS: 
    - To search the web: [[WEB_SEARCH: your_query]]
@@ -372,8 +374,113 @@ export default function App() {
   };
 
   const processAssistantResponse = async (content: string, personaId: string, updatedMessages: ExtendedMessage[]) => {
-    // Look for [[CALL: agent_id|message]]
+    let systemFeedbackHistory: string[] = [];
+
+    // 1. Look for [[SAVE_MEM: key|content]] (Process all)
+    const memMatches = Array.from(content.matchAll(/\[\[SAVE_MEM:\s*(.*?)\|(.*?)\]\]/g));
+    for (const match of memMatches) {
+      const key = match[1].trim();
+      const val = match[2].trim();
+      try {
+        await piService.saveMemory(key, val);
+        addLog('info', `AI Core saved memory for key: ${key}`);
+        systemFeedbackHistory.push(`[[MEMORY_SYNC]]: Key "${key}" updated in Sandybox SQLite.`);
+      } catch (err: any) {
+        addLog('error', `AI Memory save failed: ${err.message}`);
+        systemFeedbackHistory.push(`[[MEMORY_ERROR]]: Failed to save "${key}": ${err.message}`);
+      }
+    }
+
+    // 2. Look for [[SET_MODEL: model_name]]
+    const modelMatches = Array.from(content.matchAll(/\[\[SET_MODEL:\s*(.*?)\]\]/g));
+    for (const match of modelMatches) {
+      const modelName = match[1].trim();
+      const exists = models.find(m => m.name === modelName);
+      if (exists) {
+        setSelectedModel(modelName);
+        addLog('info', `AI Core initiated self-migration to: ${modelName}`);
+        systemFeedbackHistory.push(`[[SYSTEM_PROTOCOL]]: Self-migration to ${modelName} complete. Subsequent turns will use this model.`);
+      } else {
+        addLog('error', `AI Core requested unknown model: ${modelName}`);
+        systemFeedbackHistory.push(`[[SYSTEM_ERROR]]: Migration failed. Model ${modelName} not found in localized registry.`);
+      }
+    }
+
+    // 3. Look for [[WEB_SEARCH: query]]
+    const searchMatches = Array.from(content.matchAll(/\[\[WEB_SEARCH:\s*(.*?)\]\]/g));
+    for (const match of searchMatches) {
+      const query = match[1].trim();
+      addLog('info', `AI Core performing web search: ${query}`);
+      try {
+        const results = await ollamaService.webSearch(query);
+        const feedback = results.results?.map((r: any) => `- ${r.title}\n  URL: ${r.link}\n  Snippet: ${r.snippet}`).join('\n\n') || 'No results found.';
+        systemFeedbackHistory.push(`[[WEB_SEARCH_RESULTS]] for "${query}":\n${feedback}`);
+      } catch (err: any) {
+        addLog('error', `Web search failed: ${err.message}`);
+        systemFeedbackHistory.push(`[[SYSTEM_ERROR]]: Web search failed for "${query}": ${err.message}`);
+      }
+    }
+
+    // 4. Look for [[WEB_FETCH: url]]
+    const fetchMatches = Array.from(content.matchAll(/\[\[WEB_FETCH:\s*(.*?)\]\]/g));
+    for (const match of fetchMatches) {
+      const url = match[1].trim();
+      addLog('info', `AI Core fetching content: ${url}`);
+      try {
+        const text = await ollamaService.webFetch(url);
+        systemFeedbackHistory.push(`[[WEB_FETCH_CONTENT]] from ${url}:\n\n${text}`);
+      } catch (err: any) {
+        addLog('error', `Web fetch failed: ${err.message}`);
+        systemFeedbackHistory.push(`[[SYSTEM_ERROR]]: Web fetch failed for "${url}": ${err.message}`);
+      }
+    }
+
+    // 5. Look for [[EXEC: command]] (Process all sequentially)
+    const execMatches = Array.from(content.matchAll(/\[\[EXEC:\s*(.*?)\]\]/g));
+    for (const match of execMatches) {
+      const command = match[1].trim();
+      addLog('info', `AI Core requesting EXEC: ${command}`);
+      try {
+        const res = await piService.executeCommand(command, leftPane.path);
+        const output = res.stdout || res.stderr || '(Process completed with no output)';
+        systemFeedbackHistory.push(`[[EXEC_OUTPUT]] for "${command}":\n${output}`);
+        
+        if (command.includes('mkdir') || command.includes('touch') || command.includes('rm') || command.includes('mv') || command.includes('cp')) {
+          const refresh = await piService.getFiles(leftPane.path);
+          setLeftPane(refresh);
+        }
+      } catch (err: any) {
+        addLog('error', `AI EXEC failed: ${err.message}`);
+        systemFeedbackHistory.push(`[[EXEC_ERROR]] for "${command}":\n${err.message}`);
+      }
+    }
+
+    // 6. Look for [[CALL: agent_id|message]] (Handle last)
     const callMatch = content.match(/\[\[CALL:\s*(.*?)\|\s*([\s\S]*?)\]\]/);
+    
+    // Process System Feedback (If any actions were taken)
+    if (systemFeedbackHistory.length > 0) {
+      const systemMessage: ExtendedMessage = {
+        role: 'user',
+        content: systemFeedbackHistory.join('\n\n---\n\n'),
+        isSystemFeedback: true
+      };
+
+      setMessages(prev => {
+        const nextMessages = [...prev, systemMessage];
+        
+        // If NO agent-to-agent call was made, the CURRENT agent should continue autonomously
+        if (!callMatch) {
+          setTimeout(() => {
+            runAgentTurn(personaId, nextMessages);
+          }, 500);
+        }
+        
+        return nextMessages;
+      });
+    }
+
+    // Process CALL (Transfer turn to another agent)
     if (callMatch) {
       const targetAgentId = callMatch[1].trim();
       const messageToAgent = callMatch[2].trim();
@@ -381,133 +488,42 @@ export default function App() {
       const exists = AGENTS.find(a => a.id === targetAgentId);
       if (exists) {
         addLog('info', `Agent ${personaId} called ${targetAgentId}`);
-        const nextMessages = [...updatedMessages, { role: 'user' as const, content: `[[MESSAGE_FROM_${personaId}]]:\n${messageToAgent}`, isSystemFeedback: true }];
-        setMessages(nextMessages);
         
-        setActivePersonaId(targetAgentId); // Switch UI active persona
-        setTimeout(() => {
-          runAgentTurn(targetAgentId, nextMessages);
-        }, 500);
-        return; // Don't process EXEC etc. here to avoid chaos, or maybe we can? Let's just return to hand over.
+        setMessages(prev => {
+          const nextMessages = [...prev, { 
+            role: 'user' as const, 
+            content: `[[MESSAGE_FROM_${personaId}]]:\n${messageToAgent}`, 
+            isSystemFeedback: true,
+            agentId: personaId
+          }];
+          
+          setActivePersonaId(targetAgentId); 
+          setTimeout(() => {
+            runAgentTurn(targetAgentId, nextMessages);
+          }, 500);
+          
+          return nextMessages;
+        });
       } else {
-        addLog('error', `Agent try to call unknown agent: ${targetAgentId}`);
-        const systemFeedback: ExtendedMessage = { 
+        addLog('error', `Agent tried to call unknown agent: ${targetAgentId}`);
+        const errorFeedback: ExtendedMessage = { 
           role: 'user', 
           content: `[[SYSTEM_ERROR]]: The agent ${targetAgentId} does not exist.`,
           isSystemFeedback: true
         };
-        setMessages(prev => [...prev, systemFeedback]);
-      }
-    }
-
-    // Look for [[EXEC: command]]
-    const execMatch = content.match(/\[\[EXEC:\s*(.*?)\]\]/);
-    if (execMatch) {
-      const command = execMatch[1];
-      addLog('info', `AI Core requesting EXEC: ${command}`);
-      try {
-        const res = await piService.executeCommand(command, leftPane.path);
-        const output = res.stdout || res.stderr || '(Done)';
-        
-        // Feed output back to AI
-        const systemFeedback: ExtendedMessage = { 
-          role: 'user', 
-          content: `[[EXEC_OUTPUT]]:\n${output}`,
-          isSystemFeedback: true
-        };
-        setMessages(prev => [...prev, systemFeedback]);
-        
-        // Auto-refresh files if it looked like a file operation
-        if (command.includes('mkdir') || command.includes('touch') || command.includes('rm') || command.includes('mv')) {
-          const refresh = await piService.getFiles(leftPane.path);
-          setLeftPane(refresh);
-        }
-        
-      } catch (err: any) {
-        addLog('error', `AI EXEC failed: ${err.message}`);
-      }
-    }
-
-    // Look for [[SAVE_MEM: key|content]]
-    const memMatch = content.match(/\[\[SAVE_MEM:\s*(.*?)\|(.*?)\]\]/);
-    if (memMatch) {
-      const key = memMatch[1];
-      const val = memMatch[2];
-      try {
-        await piService.saveMemory(key, val);
-        addLog('info', `AI Core saved memory for key: ${key}`);
-      } catch (err: any) {
-        addLog('error', `AI Memory save failed: ${err.message}`);
-      }
-    }
-
-    // Look for [[SET_MODEL: model_name]]
-    const modelMatch = content.match(/\[\[SET_MODEL:\s*(.*?)\]\]/);
-    if (modelMatch) {
-      const modelName = modelMatch[1].trim();
-      const exists = models.find(m => m.name === modelName);
-      if (exists) {
-        setSelectedModel(modelName);
-        addLog('info', `AI Core initiated self-migration to: ${modelName}`);
-        
-        // Feed confirmation back
-        const systemFeedback: ExtendedMessage = { 
-          role: 'user', 
-          content: `[[SYSTEM_PROTOCOL]]: Self-migration to ${modelName} complete. Subsequent turns will use this model.`,
-          isSystemFeedback: true
-        };
-        setMessages(prev => [...prev, systemFeedback]);
-      } else {
-        addLog('error', `AI Core requested unknown model: ${modelName}`);
-        const systemFeedback: ExtendedMessage = { 
-          role: 'user', 
-          content: `[[SYSTEM_ERROR]]: Migration failed. Model ${modelName} not found in localized registry.`,
-          isSystemFeedback: true
-        };
-        setMessages(prev => [...prev, systemFeedback]);
-      }
-    }
-
-    // Look for [[WEB_SEARCH: query]]
-    const searchMatch = content.match(/\[\[WEB_SEARCH:\s*(.*?)\]\]/);
-    if (searchMatch) {
-      const query = searchMatch[1];
-      addLog('info', `AI Core performing web search: ${query}`);
-      try {
-        const results = await ollamaService.webSearch(query);
-        const feedback = results.results?.map((r: any) => `- ${r.title}\n  URL: ${r.link}\n  Snippet: ${r.snippet}`).join('\n\n') || 'No results found.';
-        
-        const systemFeedback: ExtendedMessage = { 
-          role: 'user', 
-          content: `[[WEB_SEARCH_RESULTS]]:\n${feedback}`,
-          isSystemFeedback: true
-        };
-        setMessages(prev => [...prev, systemFeedback]);
-      } catch (err: any) {
-        addLog('error', `Web search failed: ${err.message}`);
-        setMessages(prev => [...prev, { role: 'user', content: `[[SYSTEM_ERROR]]: Web search failed: ${err.message}`, isSystemFeedback: true }]);
-      }
-    }
-
-    // Look for [[WEB_FETCH: url]]
-    const fetchMatch = content.match(/\[\[WEB_FETCH:\s*(.*?)\]\]/);
-    if (fetchMatch) {
-      const url = fetchMatch[1];
-      addLog('info', `AI Core fetching content: ${url}`);
-      try {
-        const text = await ollamaService.webFetch(url);
-        const systemFeedback: ExtendedMessage = { 
-          role: 'user', 
-          content: `[[WEB_FETCH_CONTENT]] from ${url}:\n\n${text}`,
-          isSystemFeedback: true
-        };
-        setMessages(prev => [...prev, systemFeedback]);
-      } catch (err: any) {
-        addLog('error', `Web fetch failed: ${err.message}`);
-        setMessages(prev => [...prev, { role: 'user', content: `[[SYSTEM_ERROR]]: Web fetch failed: ${err.message}`, isSystemFeedback: true }]);
+        setMessages(prev => [...prev, errorFeedback]);
+        // Since CALL failed, maybe auto-continue with current agent to let them know
+        setTimeout(() => {
+          setMessages(prev => {
+            runAgentTurn(personaId, prev);
+            return prev;
+          });
+        }, 500);
       }
     }
   };
+
+
 
   const addLog = (type: 'action' | 'info' | 'error', content: string) => {
     const time = new Date().toLocaleTimeString('en-GB', { hour12: false });
